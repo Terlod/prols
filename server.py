@@ -1,6 +1,6 @@
 import asyncio
-import randomimport os
-from dotenv import load_dotenv
+import random
+import os
 from typing import Dict, List
 
 from aiogram import Bot, Dispatcher, F, Router
