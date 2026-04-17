@@ -14,7 +14,9 @@ from aiogram.client.default import DefaultBotProperties  # <-- Новый имп
 
 # ------------------ Конфигурация ------------------
 
-os.environ.get('API_TOKEN')
+API_TOKEN = os.environ.get('API_TOKEN')
+if not API_TOKEN:
+    raise ValueError("Не задан API_TOKEN в переменных окружения")
 
 # ------------------ Хранилище данных ------------------
 class Prole:
