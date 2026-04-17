@@ -1,5 +1,6 @@
 import asyncio
-import random
+import randomimport os
+from dotenv import load_dotenv
 from typing import Dict, List
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -13,7 +14,7 @@ from aiogram.client.default import DefaultBotProperties  # <-- Новый имп
 
 # ------------------ Конфигурация ------------------
 
-API_TOKEN = "API_TOKEN"
+os.environ.get('API_TOKEN')
 
 # ------------------ Хранилище данных ------------------
 class Prole:
