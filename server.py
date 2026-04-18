@@ -8,7 +8,7 @@ from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
@@ -28,12 +28,11 @@ class Prole:
         traits_str = ", ".join(self.traits) if self.traits else "нет черт"
         return f"👤 {self.name} | {self.position}\nЧерты: {traits_str}"
 
-# Теперь данные хранятся для каждого чата отдельно
+# Данные для каждого чата отдельно
 chat_proles: Dict[int, List[Prole]] = {}
 chat_last_shown: Dict[int, int] = {}
 
 def get_proles(chat_id: int) -> List[Prole]:
-    """Возвращает список пролов для конкретного чата (если нет — создаёт пустой)."""
     if chat_id not in chat_proles:
         chat_proles[chat_id] = []
     return chat_proles[chat_id]
@@ -47,24 +46,37 @@ class AddProleForm(StatesGroup):
 class DeleteProlesForm(StatesGroup):
     waiting_for_names = State()
 
+class SearchProleForm(StatesGroup):
+    waiting_for_query = State()
+
 TRAIT_WAITING_STATE = "trait_waiting"
 
-# ------------------ Клавиатура управления ------------------
-main_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="➕ Добавить прола")],
-        [KeyboardButton(text="🎲 Случайный прол")],
-        [KeyboardButton(text="✨ Добавить черту последнему")],
-        [KeyboardButton(text="📋 Список пролов")],
-        [KeyboardButton(text="❌ Удалить пролов")],
-    ],
-    resize_keyboard=True
-)
+# ------------------ Inline‑клавиатуры ------------------
+def main_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить прола", callback_data="add_prole")],
+            [InlineKeyboardButton(text="🎲 Случайный прол", callback_data="random")],
+            [InlineKeyboardButton(text="✨ Добавить черту последнему", callback_data="add_trait")],
+            [InlineKeyboardButton(text="📋 Список пролов", callback_data="list")],
+            [InlineKeyboardButton(text="🔍 Найти прола", callback_data="search")],
+            [InlineKeyboardButton(text="❌ Удалить пролов", callback_data="delete")],
+        ]
+    )
 
-cancel_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="❌ Отмена")]],
-    resize_keyboard=True
-)
+def cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_action")],
+        ]
+    )
+
+def back_to_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_to_menu")],
+        ]
+    )
 
 # ------------------ Роутер ------------------
 router = Router()
@@ -80,51 +92,85 @@ async def cmd_start(message: Message):
         "/random — случайный прол\n"
         "/trait — добавить черту последнему выданному\n"
         "/list — список всех пролов\n"
+        "/search — найти прола по имени\n"
         "/delete — удалить одного или нескольких пролов",
-        reply_markup=main_kb
+        reply_markup=main_menu_keyboard()
     )
 
-# ---------- Обработка кнопок главного меню ----------
-@router.message(F.text == "➕ Добавить прола")
-async def add_prole_button(message: Message, state: FSMContext):
+# ---------- Возврат в главное меню ----------
+@router.callback_query(F.data == "back_to_menu")
+async def back_to_menu_callback(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "🤖 Главное меню",
+        reply_markup=main_menu_keyboard()
+    )
+    await callback.answer()
+
+# ---------- Обработчики inline‑кнопок главного меню ----------
+@router.callback_query(F.data == "add_prole")
+async def add_prole_callback(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AddProleForm.waiting_for_name)
-    await message.answer("Введите имя прола:", reply_markup=cancel_kb)
+    await callback.message.edit_text("Введите имя прола:", reply_markup=cancel_keyboard())
+    await callback.answer()
 
-@router.message(F.text == "🎲 Случайный прол")
-async def random_prole_button(message: Message):
-    await cmd_random(message)
+@router.callback_query(F.data == "random")
+async def random_prole_callback(callback: CallbackQuery):
+    await cmd_random_callback(callback)
+    await callback.answer()
 
-@router.message(F.text == "✨ Добавить черту последнему")
-async def add_trait_button(message: Message, state: FSMContext):
-    await start_trait_dialog(message, state)
+@router.callback_query(F.data == "add_trait")
+async def add_trait_callback(callback: CallbackQuery, state: FSMContext):
+    await start_trait_dialog_callback(callback, state)
+    await callback.answer()
 
-@router.message(F.text == "📋 Список пролов")
-async def list_proles_button(message: Message):
-    await cmd_list(message)
+@router.callback_query(F.data == "list")
+async def list_proles_callback(callback: CallbackQuery):
+    await cmd_list_callback(callback)
+    await callback.answer()
 
-@router.message(F.text == "❌ Удалить пролов")
-async def delete_proles_button(message: Message, state: FSMContext):
+@router.callback_query(F.data == "search")
+async def search_prole_callback(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(SearchProleForm.waiting_for_query)
+    await callback.message.edit_text(
+        "🔍 Введите имя или часть имени прола для поиска:",
+        reply_markup=cancel_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "delete")
+async def delete_proles_callback(callback: CallbackQuery, state: FSMContext):
     await state.set_state(DeleteProlesForm.waiting_for_names)
-    await message.answer(
+    await callback.message.edit_text(
         "Введите имена пролов, которых нужно удалить, через запятую.\n"
         "Пример: Иван, Петр, Мария",
-        reply_markup=cancel_kb
+        reply_markup=cancel_keyboard()
     )
+    await callback.answer()
 
-@router.message(F.text == "❌ Отмена")
-async def cancel_action(message: Message, state: FSMContext):
+# Универсальная отмена из любого состояния через inline‑кнопку
+@router.callback_query(F.data == "cancel_action")
+async def cancel_action_callback(callback: CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
     if current_state is not None:
         await state.clear()
-    await message.answer("Действие отменено.", reply_markup=main_kb)
+    await callback.message.edit_text("Действие отменено.", reply_markup=main_menu_keyboard())
+    await callback.answer()
+
+# Также оставим команду /cancel для текстовой отмены
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is not None:
+        await state.clear()
+    await message.answer("Действие отменено.", reply_markup=main_menu_keyboard())
 
 # ---------- Команда /add ----------
 @router.message(Command("add"))
 async def cmd_add(message: Message, state: FSMContext):
     await state.set_state(AddProleForm.waiting_for_name)
-    await message.answer("Введите имя прола:", reply_markup=cancel_kb)
+    await message.answer("Введите имя прола:", reply_markup=cancel_keyboard())
 
-# ---------- FSM: добавление прола ----------
+# ---------- FSM: добавление одного прола ----------
 @router.message(StateFilter(AddProleForm.waiting_for_name))
 async def process_name(message: Message, state: FSMContext):
     if message.text is None:
@@ -132,7 +178,7 @@ async def process_name(message: Message, state: FSMContext):
         return
     await state.update_data(temp_name=message.text.strip())
     await state.set_state(AddProleForm.waiting_for_position)
-    await message.answer("Теперь введите должность:", reply_markup=cancel_kb)
+    await message.answer("Теперь введите должность:", reply_markup=cancel_keyboard())
 
 @router.message(StateFilter(AddProleForm.waiting_for_position))
 async def process_position(message: Message, state: FSMContext):
@@ -154,12 +200,12 @@ async def process_position(message: Message, state: FSMContext):
         await message.answer(
             f"✅ Запомнил: {name}, {position}\n"
             "Введите имя следующего прола или отправьте /done для завершения.",
-            reply_markup=cancel_kb
+            reply_markup=cancel_keyboard()
         )
     else:
         proles.append(Prole(name, position))
         await state.clear()
-        await message.answer(f"✅ Прол добавлен:\n{proles[-1]}", reply_markup=main_kb)
+        await message.answer(f"✅ Прол добавлен:\n{proles[-1]}", reply_markup=main_menu_keyboard())
 
 # ---------- Команда /add_multiple ----------
 @router.message(Command("add_multiple"))
@@ -169,7 +215,7 @@ async def cmd_add_multiple(message: Message, state: FSMContext):
     await message.answer(
         "Начинаем добавление нескольких пролов.\n"
         "Введите имя первого прола (или /done для завершения):",
-        reply_markup=cancel_kb
+        reply_markup=cancel_keyboard()
     )
 
 @router.message(StateFilter(AddProleForm.waiting_for_name), Command("done"))
@@ -181,9 +227,9 @@ async def done_adding_multiple(message: Message, state: FSMContext):
     if batch:
         for item in batch:
             proles.append(Prole(item["name"], item["position"]))
-        await message.answer(f"✅ Добавлено пролов: {len(batch)}", reply_markup=main_kb)
+        await message.answer(f"✅ Добавлено пролов: {len(batch)}", reply_markup=main_menu_keyboard())
     else:
-        await message.answer("Ни одного прола не добавлено.", reply_markup=main_kb)
+        await message.answer("Ни одного прола не добавлено.", reply_markup=main_menu_keyboard())
     await state.clear()
 
 # ---------- Команда /random ----------
@@ -196,9 +242,37 @@ async def cmd_random(message: Message):
         return
     idx = random.randrange(len(proles))
     chat_last_shown[chat_id] = idx
-    await message.answer(f"🎲 Случайный прол:\n{proles[idx]}")
+    await message.answer(
+        f"🎲 Случайный прол:\n{proles[idx]}",
+        reply_markup=prole_actions_keyboard(idx)
+    )
+
+async def cmd_random_callback(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    proles = get_proles(chat_id)
+    if not proles:
+        await callback.message.edit_text(
+            "Список пролов пуст. Сначала добавьте кого-нибудь.",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+    idx = random.randrange(len(proles))
+    chat_last_shown[chat_id] = idx
+    await callback.message.edit_text(
+        f"🎲 Случайный прол:\n{proles[idx]}",
+        reply_markup=prole_actions_keyboard(idx)
+    )
 
 # ---------- Добавление черты ----------
+def prole_actions_keyboard(idx: int) -> InlineKeyboardMarkup:
+    """Клавиатура с действиями над конкретным пролом."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✨ Добавить черту", callback_data=f"add_trait_to:{idx}")],
+            [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_to_menu")],
+        ]
+    )
+
 async def start_trait_dialog(message: Message, state: FSMContext):
     chat_id = message.chat.id
     proles = get_proles(chat_id)
@@ -211,7 +285,30 @@ async def start_trait_dialog(message: Message, state: FSMContext):
         return
     await state.update_data(trait_idx=idx)
     await state.set_state(TRAIT_WAITING_STATE)
-    await message.answer(f"Введите черту для '{proles[idx].name}':", reply_markup=cancel_kb)
+    await message.answer(f"Введите черту для '{proles[idx].name}':", reply_markup=cancel_keyboard())
+
+async def start_trait_dialog_callback(callback: CallbackQuery, state: FSMContext):
+    chat_id = callback.message.chat.id
+    proles = get_proles(chat_id)
+    if chat_id not in chat_last_shown:
+        await callback.message.edit_text(
+            "Сначала получите случайного прола с помощью /random.",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+    idx = chat_last_shown[chat_id]
+    if idx >= len(proles):
+        await callback.message.edit_text(
+            "Последний выданный прол больше не существует.",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+    await state.update_data(trait_idx=idx)
+    await state.set_state(TRAIT_WAITING_STATE)
+    await callback.message.edit_text(
+        f"Введите черту для '{proles[idx].name}':",
+        reply_markup=cancel_keyboard()
+    )
 
 @router.message(Command("trait"))
 async def cmd_trait(message: Message, command: CommandObject, state: FSMContext):
@@ -227,7 +324,10 @@ async def cmd_trait(message: Message, command: CommandObject, state: FSMContext)
             await message.answer("Последний выданный прол больше не существует.")
             return
         proles[idx].traits.append(trait.strip())
-        await message.answer(f"✅ Черта '{trait}' добавлена пролу '{proles[idx].name}'.")
+        await message.answer(
+            f"✅ Черта '{trait}' добавлена пролу '{proles[idx].name}'.",
+            reply_markup=main_menu_keyboard()
+        )
     else:
         await start_trait_dialog(message, state)
 
@@ -238,9 +338,35 @@ async def trait_received(message: Message, state: FSMContext):
     trait = message.text.strip()
     chat_id = message.chat.id
     proles = get_proles(chat_id)
+    if idx >= len(proles):
+        await state.clear()
+        await message.answer("Прол не найден.", reply_markup=main_menu_keyboard())
+        return
     proles[idx].traits.append(trait)
     await state.clear()
-    await message.answer(f"✅ Черта '{trait}' добавлена.", reply_markup=main_kb)
+    await message.answer(f"✅ Черта '{trait}' добавлена.", reply_markup=main_menu_keyboard())
+
+# Добавление черты конкретному пролу через callback (из поиска или случайного)
+@router.callback_query(F.data.startswith("add_trait_to:"))
+async def add_trait_to_callback(callback: CallbackQuery, state: FSMContext):
+    idx_str = callback.data.split(":")[1]
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await callback.answer("Некорректный индекс.", show_alert=True)
+        return
+    chat_id = callback.message.chat.id
+    proles = get_proles(chat_id)
+    if idx >= len(proles):
+        await callback.answer("Прол не найден.", show_alert=True)
+        return
+    await state.update_data(trait_idx=idx)
+    await state.set_state(TRAIT_WAITING_STATE)
+    await callback.message.edit_text(
+        f"Введите черту для '{proles[idx].name}':",
+        reply_markup=cancel_keyboard()
+    )
+    await callback.answer()
 
 # ---------- Команда /list ----------
 @router.message(Command("list"))
@@ -253,7 +379,85 @@ async def cmd_list(message: Message):
     text = "📋 Список пролов:\n\n"
     for i, p in enumerate(proles, 1):
         text += f"{i}. {p}\n\n"
-    await message.answer(text)
+    await message.answer(text, reply_markup=main_menu_keyboard())
+
+async def cmd_list_callback(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    proles = get_proles(chat_id)
+    if not proles:
+        await callback.message.edit_text("Список пролов пуст.", reply_markup=main_menu_keyboard())
+        return
+    text = "📋 Список пролов:\n\n"
+    for i, p in enumerate(proles, 1):
+        text += f"{i}. {p}\n\n"
+    await callback.message.edit_text(text, reply_markup=main_menu_keyboard())
+
+# ---------- Поиск прола по имени ----------
+@router.message(StateFilter(SearchProleForm.waiting_for_query))
+async def process_search_query(message: Message, state: FSMContext):
+    query = message.text.strip().lower()
+    chat_id = message.chat.id
+    proles = get_proles(chat_id)
+    if not proles:
+        await message.answer("Список пролов пуст.", reply_markup=main_menu_keyboard())
+        await state.clear()
+        return
+
+    # Ищем пролов, содержащих запрос в имени (регистронезависимо)
+    matches = [(idx, p) for idx, p in enumerate(proles) if query in p.name.lower()]
+    if not matches:
+        await message.answer(
+            f"🔍 По запросу «{message.text.strip()}» ничего не найдено.",
+            reply_markup=main_menu_keyboard()
+        )
+        await state.clear()
+        return
+
+    if len(matches) == 1:
+        # Если найден один – сразу показываем его карточку
+        idx, prole = matches[0]
+        chat_last_shown[chat_id] = idx
+        await message.answer(
+            f"🔍 Найден прол:\n{prole}",
+            reply_markup=prole_actions_keyboard(idx)
+        )
+    else:
+        # Несколько совпадений – показываем список для выбора
+        kb_buttons = []
+        for idx, prole in matches:
+            kb_buttons.append([
+                InlineKeyboardButton(
+                    text=f"{prole.name} ({prole.position})",
+                    callback_data=f"show_prole:{idx}"
+                )
+            ])
+        kb_buttons.append([InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_to_menu")])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
+        await message.answer(
+            f"🔍 Найдено совпадений: {len(matches)}. Выберите прола:",
+            reply_markup=keyboard
+        )
+    await state.clear()
+
+@router.callback_query(F.data.startswith("show_prole:"))
+async def show_prole_callback(callback: CallbackQuery):
+    idx_str = callback.data.split(":")[1]
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await callback.answer("Некорректный индекс.", show_alert=True)
+        return
+    chat_id = callback.message.chat.id
+    proles = get_proles(chat_id)
+    if idx >= len(proles):
+        await callback.answer("Прол не найден.", show_alert=True)
+        return
+    chat_last_shown[chat_id] = idx
+    await callback.message.edit_text(
+        f"👤 {proles[idx]}",
+        reply_markup=prole_actions_keyboard(idx)
+    )
+    await callback.answer()
 
 # ---------- Удаление пролов ----------
 @router.message(Command("delete"))
@@ -266,9 +470,9 @@ async def cmd_delete(message: Message, command: CommandObject):
     chat_id = message.chat.id
     deleted_count = delete_proles_by_names(chat_id, names)
     if deleted_count:
-        await message.answer(f"✅ Удалено пролов: {deleted_count}")
+        await message.answer(f"✅ Удалено пролов: {deleted_count}", reply_markup=main_menu_keyboard())
     else:
-        await message.answer("❌ Ни один из указанных пролов не найден.")
+        await message.answer("❌ Ни один из указанных пролов не найден.", reply_markup=main_menu_keyboard())
 
 @router.message(StateFilter(DeleteProlesForm.waiting_for_names))
 async def process_delete_names(message: Message, state: FSMContext):
@@ -280,12 +484,11 @@ async def process_delete_names(message: Message, state: FSMContext):
     deleted_count = delete_proles_by_names(chat_id, names)
     await state.clear()
     if deleted_count:
-        await message.answer(f"✅ Удалено пролов: {deleted_count}", reply_markup=main_kb)
+        await message.answer(f"✅ Удалено пролов: {deleted_count}", reply_markup=main_menu_keyboard())
     else:
-        await message.answer("❌ Ни один из указанных пролов не найден.", reply_markup=main_kb)
+        await message.answer("❌ Ни один из указанных пролов не найден.", reply_markup=main_menu_keyboard())
 
 def delete_proles_by_names(chat_id: int, names: List[str]) -> int:
-    """Удаляет пролов по списку имён (регистронезависимо) и возвращает количество удалённых."""
     proles = get_proles(chat_id)
     deleted = 0
     for name in names:
